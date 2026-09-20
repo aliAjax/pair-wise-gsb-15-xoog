@@ -1,0 +1,64 @@
+import {test,expect,Page} from '@playwright/test';
+const createDraft=async(page:Page,reason:string)=>{await page.goto('/matrix');await expect(page.getByTestId('draft-create')).toBeVisible();await page.getByTestId('draft-reason').fill(reason);await page.getByTestId('create-draft').click();await expect(page.getByTestId('matrix-draft')).toBeVisible()};
+test.describe.serial('审批矩阵与代理链闭环',()=>{
+ test('已发布快照冻结只读，调整必须新建带原因的草稿',async({page})=>{
+  await page.goto('/matrix');
+  await expect(page.getByTestId('matrix-snapshots')).toContainText('v1');
+  await expect(page.getByTestId('matrix-snapshots')).toContainText('已冻结');
+  await expect(page.getByTestId('matrix-snapshots').locator('input,select')).toHaveCount(0);
+  await expect(page.getByTestId('publish-matrix')).toHaveCount(0);
+  await expect(page.getByTestId('create-draft')).toBeDisabled();
+  await page.getByTestId('draft-reason').fill('三季度额度调整');
+  await page.getByTestId('create-draft').click();
+  await expect(page.getByTestId('matrix-draft')).toContainText('基于 v1');
+  await expect(page.getByTestId('matrix-draft')).toContainText('三季度额度调整');
+ });
+ test('区间重叠、代理成环与离职未交接阻止发布并列出明细',async({page})=>{
+  await createDraft(page,'冲突演示');
+  await page.getByTestId('validate-matrix').click();
+  const conflicts=page.getByTestId('matrix-conflicts');
+  await expect(conflicts).toContainText('法务经理');
+  await expect(conflicts).toContainText('高额合同会签');
+  await expect(conflicts).toContainText('陆远 → 赵安 → 陆远');
+  await page.getByTestId('add-rule').click();
+  const row=page.getByTestId('rule-row-3');
+  await row.getByLabel('审批角色').selectOption('部门负责人');
+  await row.getByLabel('金额下限').fill('3000');
+  await row.getByLabel('金额上限').fill('8000');
+  await page.getByTestId('validate-matrix').click();
+  await expect(conflicts).toContainText('区间重叠');
+  await expect(conflicts).toContainText('部门负责人');
+  await expect(conflicts).toContainText('直属主管审批');
+  await expect(conflicts).toContainText('¥3,000 – ¥5,000');
+  await page.getByTestId('publish-matrix').click();
+  await expect(page.getByRole('status')).toContainText('无法发布');
+  await expect(page.getByTestId('matrix-draft')).toBeVisible();
+  await expect(page.getByTestId('matrix-snapshots')).not.toContainText('v2');
+ });
+ test('修复冲突后发布成功，新实例用新版本、旧实例保持旧快照',async({page})=>{
+  await createDraft(page,'修复后发布');
+  await page.getByLabel('交接人-法务经理').selectOption('方可');
+  await page.getByTestId('rule-row-2').getByLabel('代理审批人').selectOption('陈默');
+  await page.getByTestId('publish-matrix').click();
+  await expect(page.getByRole('status')).toContainText('发布成功');
+  await expect(page.getByTestId('matrix-snapshots')).toContainText('v2');
+  await expect(page.getByTestId('snapshot-v2')).toContainText('已冻结');
+  await expect(page.getByTestId('matrix-draft')).toHaveCount(0);
+  await page.getByTestId('new-instance').click();
+  const rows=page.getByTestId('instance-snapshot-row');
+  await expect(rows.first()).toContainText('v2 快照');
+  await expect(rows.filter({hasText:'INS-2026-0001'})).toContainText('v1 快照');
+ });
+ test('刷新后矩阵、草稿与实例快照仍对应',async({page})=>{
+  await createDraft(page,'刷新保持验证');
+  await page.getByTestId('new-instance').click();
+  await expect(page.getByTestId('instance-snapshot-row').first()).toContainText('v1 快照');
+  await page.getByTestId('rule-row-0').getByLabel('金额上限').fill('6000');
+  await page.reload();
+  await expect(page.getByTestId('matrix-draft')).toContainText('刷新保持验证');
+  await expect(page.getByTestId('matrix-draft')).toContainText('基于 v1');
+  await expect(page.getByTestId('rule-row-0').getByLabel('金额上限')).toHaveValue('6000');
+  await expect(page.getByTestId('matrix-snapshots')).toContainText('v1');
+  await expect(page.getByTestId('instance-snapshot-row').first()).toContainText('v1 快照');
+ });
+});
